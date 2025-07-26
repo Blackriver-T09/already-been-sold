@@ -21,7 +21,7 @@ class FaceEmotionClient:
         """
         self.server_url = server_url
         
-        # Socket.IO客户端配置 - 🆕 HTTP隧道优化
+        # Socket.IO客户端配置 - 🆕 HTTP隧道优化 + 🐧 Ubuntu兼容性
         self.sio = socketio.Client(
             logger=False,
             engineio_logger=False,
@@ -30,7 +30,10 @@ class FaceEmotionClient:
             reconnection_delay=2,          # 增加重连延迟
             reconnection_delay_max=10,     # 增加最大重连延迟
             # HTTP隧道优化配置
-            request_timeout=60             # 增加请求超时
+            request_timeout=60,            # 增加请求超时
+            # 🐧 Ubuntu兼容性配置
+            http_session=None,             # 避免会话冲突
+            ssl_verify=False               # 禁用SSL验证避免证书问题
             # 注意: transports参数在较旧版本中不支持，已移除
         )
         
@@ -431,13 +434,21 @@ class FaceEmotionClient:
         try:
             print(f"🔄 正在连接到服务器: {self.server_url}")
             
-            self.sio.connect(
-                self.server_url,
-                transports=['websocket', 'polling'],
-                wait_timeout=10
-            )
+            # 🐧 Ubuntu兼容性: 使用更宽松的连接参数
+            connect_params = {
+                'wait_timeout': 15,  # 增加超时时间
+                'transports': ['websocket', 'polling']
+            }
             
-            time.sleep(1)
+            # 在Ubuntu上可能需要禁用某些传输方式
+            import platform
+            if platform.system() == 'Linux':
+                print("🐧 检测到Linux系统，使用Ubuntu优化配置")
+                connect_params['transports'] = ['polling', 'websocket']  # 优先使用polling
+            
+            self.sio.connect(self.server_url, **connect_params)
+            
+            time.sleep(2)  # 稍微增加等待时间
             
             if self.sio.connected:
                 self.is_connected = True
@@ -453,6 +464,9 @@ class FaceEmotionClient:
         except Exception as e:
             self.is_connected = False
             print(f"❌ 连接服务器失败: {str(e)}")
+            # 🐧 Ubuntu特定错误处理
+            if 'timeout' in str(e).lower() or 'connection' in str(e).lower():
+                print("🐧 检测到连接超时，可能是Ubuntu网络配置问题")
             return False
     
     def disconnect_from_server(self):

@@ -41,7 +41,7 @@ from utils.API_voice import generate_voice
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
 
-# 🆕 增强SocketIO配置以支持HTTP隧道
+# 🆕 增强SocketIO配置以支持HTTP隧道和Ubuntu兼容性
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*", 
@@ -50,7 +50,11 @@ socketio = SocketIO(
     ping_timeout=60,        # 增加ping超时时间
     ping_interval=25,       # 减少ping间隔
     max_http_buffer_size=10**8,  # 增加缓冲区大小支持大视频帧
-    allow_upgrades=True     # 允许协议升级
+    allow_upgrades=True,    # 允许协议升级
+    # 🐧 Ubuntu兼容性配置
+    engineio_logger=False,  # 禁用engineio日志避免内部错误
+    logger=False,           # 禁用socketio日志
+    always_connect=False    # 避免连接状态冲突
     # 注意: transports参数在较旧版本中可能不支持，已移除
 )
 
@@ -580,7 +584,11 @@ def handle_video_frame(data):
         # 🆕 添加数据验证
         if not data or 'image' not in data:
             print(f"⚠️ 客户端 {client_id} 发送了无效的视频帧数据")
-            emit('error', {'message': '无效的视频帧数据'})
+            # 🐧 Ubuntu兼容性: 使用try-except包裹emit
+            try:
+                emit('error', {'message': '无效的视频帧数据'})
+            except Exception as emit_error:
+                print(f"⚠️ emit错误失败: {emit_error}")
             return
         
         # 处理视频帧
@@ -588,16 +596,29 @@ def handle_video_frame(data):
         
         # 🆕 检查处理结果
         if result and result.get('success', False):
-            emit('processed_frame', result)
+            # 🐧 Ubuntu兼容性: 使用try-except包裹emit
+            try:
+                emit('processed_frame', result)
+            except Exception as emit_error:
+                print(f"⚠️ emit处理结果失败: {emit_error}")
         else:
             error_msg = result.get('error', '未知处理错误') if result else '处理结果为空'
             print(f"⚠️ 视频帧处理失败: {error_msg}")
-            emit('error', {'message': error_msg})
+            # 🐧 Ubuntu兼容性: 使用try-except包裹emit
+            try:
+                emit('error', {'message': error_msg})
+            except Exception as emit_error:
+                print(f"⚠️ emit错误失败: {emit_error}")
         
     except Exception as e:
         error_msg = f"处理视频帧时出错: {str(e)}"
         print(f"❌ {error_msg}")
-        emit('error', {'message': error_msg})
+        
+        # 🐧 Ubuntu兼容性: 使用try-except包裹emit
+        try:
+            emit('error', {'message': error_msg})
+        except Exception as emit_error:
+            print(f"⚠️ emit错误失败: {emit_error}")
         
         # 🆕 如果是MediaPipe相关错误，尝试重置AI处理器
         if 'MediaPipe' in str(e) or 'timestamp' in str(e).lower():
