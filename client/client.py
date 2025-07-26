@@ -12,7 +12,7 @@ import os
 class FaceEmotionClient:
     """人脸情感识别WebSocket客户端"""
     
-    def __init__(self, server_url='http://frp-hub.com:45170'):
+    def __init__(self, server_url='http://test2.heihet09.com'):
         """
         初始化客户端
         
@@ -708,8 +708,8 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='人脸情感识别客户端')
-    parser.add_argument('--server', default='http://frp-hub.com:45170', 
-                       help='服务器地址 (默认: http://frp-hub.com:45170)')
+    parser.add_argument('--server', default='http://test2.heihet09.com', 
+                       help='服务器地址 (默认: http://test2.heihet09.com)')
     parser.add_argument('--camera', type=int, default=0, 
                        help='摄像头ID (默认: 0)')
     
