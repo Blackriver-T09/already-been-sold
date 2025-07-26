@@ -26,8 +26,8 @@ mp_face_mesh = mp.solutions.face_mesh
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
 
-# 初始化摄像头，参数0表示使用默认摄像头
-cap = cv2.VideoCapture(1)
+# 注意：服务端不直接访问摄像头，只处理客户端发送的视频帧
+# cap = cv2.VideoCapture(1)  # 已注释，服务端不需要直接访问摄像头
 
 
 

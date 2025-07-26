@@ -560,15 +560,8 @@ class FaceEmotionClient:
                 display_copy = None
                 with self.frame_lock:
                     if self.special_display_mode and self.special_display_image is not None:
-                        # 🌟 特殊显示模式：显示合成图片
+                        # 🌟 特殊显示模式：显示合成图片（无倒计时）
                         display_copy = self.special_display_image.copy()
-                        
-                        # 🆕 添加倒计时显示
-                        remaining_time = max(0, self.special_display_end_time - current_time)
-                        if remaining_time > 0:
-                            countdown_text = f"展示中... {remaining_time:.1f}s"
-                            cv2.putText(display_copy, countdown_text, (10, display_copy.shape[0] - 50), 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 3)
                         
                     elif self.display_frame is not None:
                         # 🔄 正常模式：显示实时识别画面
@@ -642,8 +635,8 @@ class FaceEmotionClient:
             latency_text = f"Latency: {self.stats['avg_latency']*1000:.1f}ms"
             cv2.putText(image, latency_text, (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
-        # 🆕 增强控制提示
-        controls_text = "Keys: ESC/Q(Exit) | P(Ping) | S(Stats) | D(Debug) | T(Test Audio)"
+        # 🆕 简化控制提示（仅保留退出）
+        controls_text = "Press ESC or Q to Exit"
         cv2.putText(image, controls_text, (10, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
     
     def start(self):

@@ -75,9 +75,9 @@ def main():
         emotion_history, emotion_lock, history_lock
     )
     
-    # 🔧 修改抓拍间隔：10秒 → 30秒
+    # 🔧 修改抓拍间隔：10秒 → 30秒 → 15秒
     happy_capture = HappyCaptureManager(
-        capture_interval=30,  # 🆕 从10改为30秒
+        capture_interval=15,  # 🆕 从30改为15秒，提高抓拍频率
         save_directory="pictures"
     )
     

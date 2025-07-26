@@ -13,8 +13,12 @@ from collections import deque, Counter
 import tensorflow as tf
 import torch
 
-# 导入GPU配置
-from gpu_config import setup_gpu_environment, get_optimal_deepface_config, monitor_gpu_usage
+# 导入GPU配置（支持直接运行和模块导入）
+try:
+    from .gpu_config import setup_gpu_environment, get_optimal_deepface_config, monitor_gpu_usage
+except ImportError:
+    # 直接运行时使用绝对导入
+    from gpu_config import setup_gpu_environment, get_optimal_deepface_config, monitor_gpu_usage
 
 # 初始化GPU环境
 setup_gpu_environment()
@@ -70,12 +74,11 @@ class GPUEmotionAnalyzer:
             # 创建一个小的测试图像来预热模型
             dummy_img = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
             
-            # 预热DeepFace模型
+            # 预热DeepFace模型（移除不兼容参数）
             _ = DeepFace.analyze(
                 dummy_img, 
                 actions=['emotion'],
                 detector_backend=self.deepface_config['detector_backend'],
-                model_name=self.deepface_config['model_name'],
                 enforce_detection=False
             )
             
@@ -116,16 +119,14 @@ class GPUEmotionAnalyzer:
             # GPU加速的图像预处理
             face_img_processed = self._gpu_preprocess_image(face_img)
             
-            # 使用GPU进行DeepFace分析
+            # 使用GPU进行DeepFace分析（移除不兼容的参数）
             with tf.device('/GPU:0'):  # 强制使用GPU
                 result = DeepFace.analyze(
                     face_img_processed, 
                     actions=['emotion'],
                     detector_backend=self.deepface_config['detector_backend'],
-                    model_name=self.deepface_config['model_name'],
-                    enforce_detection=self.deepface_config['enforce_detection'],
-                    align=self.deepface_config['align'],
-                    normalization=self.deepface_config['normalization']
+                    enforce_detection=self.deepface_config['enforce_detection']
+                    # 注意：model_name, align, normalization 参数在当前版本中不被支持，已移除
                 )
             
             if isinstance(result, list):

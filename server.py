@@ -21,8 +21,15 @@ from utils import *
 from config import *
 from emotion_tracker import *
 
+# 🚀 导入GPU加速的情感识别模块
+from utils.face_emotion_gpu import analyze_emotion_gpu, get_gpu_performance_stats
+from utils.gpu_config import setup_gpu_environment, monitor_gpu_usage
+
 # 🆕 导入API函数
 from utils.API_picture import generate_poisonous_comment
+
+# 初始化GPU环境
+setup_gpu_environment()
 from utils.API_voice import generate_voice
 
 # Flask应用初始化
@@ -53,7 +60,9 @@ connected_clients = {}
 processing_stats = {
     'total_frames': 0,
     'processed_frames': 0,
-    'avg_processing_time': 0
+    'avg_processing_time': 0,
+    'gpu_enabled': True,  # GPU加速状态
+    'gpu_stats': {}       # GPU性能统计
 }
 
 class AIProcessor:
@@ -73,7 +82,7 @@ class AIProcessor:
         
         # 初始化快乐瞬间捕捉管理器
         self.happy_capture = HappyCaptureManager(
-            capture_interval=20,
+            capture_interval=15,  # 🆕 从20改为15秒，与main.py保持一致
             save_directory="pictures"
         )
         self.happy_capture.image_composer = ImageComposer(sources_dir="sources")
@@ -82,12 +91,12 @@ class AIProcessor:
         self.happy_capture.set_photo_callback(self.on_photo_taken)
         self.happy_capture.image_composer.set_composition_callback(self.on_photo_composed)
         
-        # 初始化MediaPipe Face Mesh
+        # 初始化MediaPipe Face Mesh（提高灵敏度）
         self.face_mesh = mp_face_mesh.FaceMesh(
             max_num_faces=5,
             refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_detection_confidence=0.3,  # 🆕 从0.5降低到0.3，提高检测灵敏度
+            min_tracking_confidence=0.3   # 🆕 从0.5降低到0.3，提高跟踪灵敏度
         )
         
         # 🆕 存储当前处理的客户端ID
@@ -352,9 +361,9 @@ class AIProcessor:
                 # 提取人脸区域进行情感分析
                 face_img = extract_face_region(original_image, face_info['bbox'])
                 
-                # 调度情感分析
+                # 🚀 调度GPU加速情感分析
                 self.emotion_scheduler.schedule_emotion_analysis(
-                    matched_id, face_img, emotion_lock, emotion_cache, analyze_emotion
+                    matched_id, face_img, emotion_lock, emotion_cache, analyze_emotion_gpu
                 )
                 
                 # 获取情感数据
@@ -571,11 +580,36 @@ def handle_ping(data):
 @socketio.on('get_stats')
 def handle_get_stats():
     """获取服务器统计信息"""
+    # 🚀 更新GPU性能统计
+    try:
+        processing_stats['gpu_stats'] = get_gpu_performance_stats()
+        gpu_usage = monitor_gpu_usage()
+        processing_stats['gpu_usage'] = gpu_usage
+    except Exception as e:
+        processing_stats['gpu_error'] = str(e)
+    
     emit('stats_response', {
         'processing_stats': processing_stats,
         'connected_clients': len(connected_clients),
         'server_time': time.time()
     })
+
+@socketio.on('get_gpu_stats')
+def handle_get_gpu_stats():
+    """获取GPU性能统计"""
+    try:
+        gpu_stats = get_gpu_performance_stats()
+        gpu_usage = monitor_gpu_usage()
+        emit('gpu_stats_response', {
+            'gpu_performance': gpu_stats,
+            'gpu_usage': gpu_usage,
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        emit('gpu_stats_response', {
+            'error': str(e),
+            'timestamp': time.time()
+        })
 
 # HTTP路由
 @app.route('/')
@@ -602,8 +636,26 @@ def health_check():
 
 if __name__ == '__main__':
     print("🚀 启动人脸情感识别服务器...")
+    
+    # 🚀 显示GPU状态
+    try:
+        gpu_stats = get_gpu_performance_stats()
+        gpu_usage = monitor_gpu_usage()
+        print(f"📊 GPU状态: {gpu_stats.get('gpu_available', False)}")
+        print(f"📊 CUDA可用: {gpu_stats.get('cuda_available', False)}")
+        if gpu_usage.get('torch_cuda'):
+            print(f"📊 GPU设备: {gpu_usage.get('torch_device_count', 0)} 个")
+            print(f"📊 GPU内存: {gpu_usage.get('gpu_memory_total', 0):.0f}MB")
+        print(f"🤖 DeepFace配置: {gpu_stats.get('deepface_config', {})}")
+        processing_stats['gpu_stats'] = gpu_stats
+        processing_stats['gpu_usage'] = gpu_usage
+    except Exception as e:
+        print(f"⚠️ GPU状态检查失败: {e}")
+        processing_stats['gpu_enabled'] = False
+    
     print("📡 WebSocket服务器: http://localhost:7861")
     print("🌐 状态页面: http://localhost:7861")
     print("❤️ 健康检查: http://localhost:7861/health")
+    print("🚀 服务器启动中...")
     
-    socketio.run(app, host='0.0.0.0', port=7861, debug=True, use_reloader=False)
+    socketio.run(app, host='0.0.0.0', port=7861, debug=False, use_reloader=False)
