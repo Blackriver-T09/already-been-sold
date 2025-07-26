@@ -61,7 +61,7 @@ class AIProcessor:
         
         # 初始化快乐瞬间捕捉管理器
         self.happy_capture = HappyCaptureManager(
-            capture_interval=30,
+            capture_interval=20,
             save_directory="pictures"
         )
         self.happy_capture.image_composer = ImageComposer(sources_dir="sources")
@@ -539,8 +539,8 @@ def health_check():
 
 if __name__ == '__main__':
     print("🚀 启动人脸情感识别服务器...")
-    print("📡 WebSocket服务器: http://localhost:5000")
-    print("🌐 状态页面: http://localhost:5000")
-    print("❤️ 健康检查: http://localhost:5000/health")
+    print("📡 WebSocket服务器: http://localhost:7860")
+    print("🌐 状态页面: http://localhost:7860")
+    print("❤️ 健康检查: http://localhost:7860/health")
     
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    socketio.run(app, host='0.0.0.0', port=7860, debug=True, use_reloader=False)
