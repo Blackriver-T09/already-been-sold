@@ -28,6 +28,11 @@ from utils.gpu_config import setup_gpu_environment, monitor_gpu_usage
 # 🆕 导入API函数
 from utils.API_picture import generate_poisonous_comment
 
+# 🧠 导入内存管理和文件清理模块
+from utils.memory_manager import MemoryManager
+from utils.file_cleaner import FileCleanupManager
+from utils.emotion_tuning import emotion_tuning, apply_emotion_tuning, get_tuned_sensitivity_config
+
 # 初始化GPU环境
 setup_gpu_environment()
 from utils.API_voice import generate_voice
@@ -105,6 +110,30 @@ class AIProcessor:
         # 🆕 时间戳管理 - 解决MediaPipe时间戳错误
         self.frame_timestamp = 0
         self.timestamp_lock = threading.Lock()
+        
+        # 🧠 初始化内存管理器
+        self.memory_manager = MemoryManager(
+            emotion_cache=emotion_cache,
+            emotion_history=emotion_history,
+            emotion_lock=emotion_lock,
+            history_lock=history_lock,
+            max_face_cache_size=50,
+            cache_expire_time=300,  # 5分钟
+            cleanup_interval=60     # 1分钟清理一次
+        )
+        
+        # 🗂️ 初始化文件清理管理器
+        self.file_cleanup_manager = FileCleanupManager(
+            pictures_dir="pictures",
+            voice_dir="output_voice",
+            max_files_per_dir=100,
+            max_file_age_hours=24,
+            cleanup_interval_minutes=30
+        )
+        
+        # 🎯 加载情感精调配置
+        self.tuning_config = get_tuned_sensitivity_config()
+        print(f"🎯 情感精调配置已加载: {self.tuning_config}")
         
         print("✅ AI处理器初始化完成")
     
@@ -442,6 +471,9 @@ class AIProcessor:
     
     def _get_emotion_data(self, matched_id):
         """获取情感数据"""
+        # 🧠 记录人脸访问，用于内存管理
+        self.memory_manager.record_face_access(matched_id)
+        
         with emotion_lock:
             if matched_id in emotion_cache:
                 emotion_data = emotion_cache[matched_id]
@@ -449,6 +481,18 @@ class AIProcessor:
                 emotion = emotion_data['dominant_emotion']
                 score = emotion_data['dominant_score']
                 all_emotions = emotion_data.get('all_emotions', {})
+                
+                # 🎯 应用情感精调配置
+                tuned_emotions = apply_emotion_tuning(all_emotions)
+                
+                # 重新计算主导情感
+                if tuned_emotions:
+                    dominant_emotion = max(tuned_emotions, key=tuned_emotions.get)
+                    dominant_score = tuned_emotions[dominant_emotion]
+                    
+                    emotion = dominant_emotion
+                    score = dominant_score
+                    all_emotions = tuned_emotions
                 
                 emotion_text = f"{emotion.capitalize()}({score:.1f})"
                 emotion_color = emotion_colors.get(emotion, (255, 255, 255))
@@ -607,6 +651,111 @@ def handle_get_gpu_stats():
         })
     except Exception as e:
         emit('gpu_stats_response', {
+            'error': str(e),
+            'timestamp': time.time()
+        })
+
+@socketio.on('get_memory_stats')
+def handle_get_memory_stats():
+    """获取内存管理统计"""
+    try:
+        memory_stats = ai_processor.memory_manager.get_memory_stats()
+        emit('memory_stats_response', {
+            'memory_stats': memory_stats,
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        emit('memory_stats_response', {
+            'error': str(e),
+            'timestamp': time.time()
+        })
+
+@socketio.on('get_file_stats')
+def handle_get_file_stats():
+    """获取文件清理统计"""
+    try:
+        file_stats = ai_processor.file_cleanup_manager.get_directory_stats()
+        emit('file_stats_response', {
+            'file_stats': file_stats,
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        emit('file_stats_response', {
+            'error': str(e),
+            'timestamp': time.time()
+        })
+
+@socketio.on('force_cleanup')
+def handle_force_cleanup(data):
+    """强制清理"""
+    try:
+        cleanup_type = data.get('type', 'all')
+        
+        if cleanup_type in ['memory', 'all']:
+            ai_processor.memory_manager.force_cleanup()
+        
+        if cleanup_type in ['files', 'all']:
+            ai_processor.file_cleanup_manager.force_cleanup()
+        
+        emit('cleanup_response', {
+            'success': True,
+            'type': cleanup_type,
+            'message': f'{cleanup_type}清理完成',
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        emit('cleanup_response', {
+            'success': False,
+            'error': str(e),
+            'timestamp': time.time()
+        })
+
+@socketio.on('get_emotion_tuning')
+def handle_get_emotion_tuning():
+    """获取情感精调配置"""
+    try:
+        config_summary = emotion_tuning.get_config_summary()
+        emit('emotion_tuning_response', {
+            'config': config_summary,
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        emit('emotion_tuning_response', {
+            'error': str(e),
+            'timestamp': time.time()
+        })
+
+@socketio.on('update_emotion_tuning')
+def handle_update_emotion_tuning(data):
+    """更新情感精调配置"""
+    try:
+        update_type = data.get('type')
+        values = data.get('values', {})
+        
+        if update_type == 'weights':
+            emotion_tuning.update_emotion_weights(values)
+        elif update_type == 'biases':
+            emotion_tuning.update_emotion_biases(values)
+        elif update_type == 'probability_adjustments':
+            emotion_tuning.update_probability_adjustments(values)
+        elif update_type == 'preset':
+            preset_name = data.get('preset_name')
+            emotion_tuning.create_preset_config(preset_name)
+        else:
+            raise ValueError(f'未知的更新类型: {update_type}')
+        
+        # 更新AI处理器的配置
+        ai_processor.tuning_config = get_tuned_sensitivity_config()
+        
+        emit('tuning_update_response', {
+            'success': True,
+            'type': update_type,
+            'message': '情感精调配置已更新',
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        emit('tuning_update_response', {
+            'success': False,
             'error': str(e),
             'timestamp': time.time()
         })

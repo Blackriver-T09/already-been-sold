@@ -38,6 +38,15 @@ class FaceEmotionClient:
         self.is_running = False
         self.is_connected = False
         
+        # 🔄 断网重连相关
+        self.reconnect_enabled = True
+        self.reconnect_thread = None
+        self.reconnect_interval = 5  # 重连间隔（秒）
+        self.max_reconnect_interval = 60  # 最大重连间隔
+        self.reconnect_attempts = 0
+        self.last_disconnect_time = 0
+        self.connection_stable_time = 10  # 连接稳定时间（秒）
+        
         # 显示相关
         self.display_frame = None
         self.frame_lock = threading.Lock()
@@ -108,14 +117,19 @@ class FaceEmotionClient:
             print("🔗 已连接到服务器")
             self.is_connected = True
             self.stats['connection_time'] = time.time()
+            # 🔄 连接成功后重置重连状态
+            self.reconnect_attempts = 0
+            self.reconnect_interval = 5
         
         @self.sio.event
         def disconnect():
             print("❌ 与服务器断开连接")
             self.is_connected = False
+            self.last_disconnect_time = time.time()
             if self.is_running:
-                print("🔄 尝试重新连接...")
-                threading.Timer(2.0, self._reconnect).start()
+                print("🔄 检测到断线，将启动重连机制...")
+                # 🔄 使用新的重连系统
+                self.start_reconnect_thread()
         
         @self.sio.event
         def connect_error(data):
@@ -400,16 +414,7 @@ class FaceEmotionClient:
             self.pending_display_duration = 0
         print("🔄 返回实时识别界面")
     
-    def _reconnect(self):
-        """自动重连"""
-        if self.is_running and not self.is_connected:
-            try:
-                print("🔄 尝试重新连接到服务器...")
-                self.sio.connect(self.server_url, 
-                               transports=['websocket', 'polling'],
-                               wait_timeout=10)
-            except Exception as e:
-                print(f"❌ 重连失败: {str(e)}")
+
     
     def _update_latency(self, latency):
         """更新延迟统计"""
@@ -435,24 +440,92 @@ class FaceEmotionClient:
             time.sleep(1)
             
             if self.sio.connected:
+                self.is_connected = True
+                self.reconnect_attempts = 0  # 重置重连计数
+                self.reconnect_interval = 5  # 重置重连间隔
                 print("✅ 连接成功")
                 return True
             else:
+                self.is_connected = False
                 print("❌ 连接失败")
                 return False
                 
         except Exception as e:
+            self.is_connected = False
             print(f"❌ 连接服务器失败: {str(e)}")
             return False
     
     def disconnect_from_server(self):
         """断开服务器连接"""
         try:
+            self.is_connected = False
+            self.last_disconnect_time = time.time()
             if self.sio.connected:
                 self.sio.disconnect()
                 print("✅ 已断开服务器连接")
         except Exception as e:
             print(f"⚠️ 断开连接时出错: {str(e)}")
+    
+    def start_reconnect_thread(self):
+        """启动重连线程"""
+        if self.reconnect_thread is None or not self.reconnect_thread.is_alive():
+            self.reconnect_thread = threading.Thread(target=self._reconnect_loop, daemon=True)
+            self.reconnect_thread.start()
+            print("🔄 重连线程已启动")
+    
+    def stop_reconnect_thread(self):
+        """停止重连线程"""
+        self.reconnect_enabled = False
+        if self.reconnect_thread and self.reconnect_thread.is_alive():
+            print("🚫 停止重连线程")
+    
+    def _reconnect_loop(self):
+        """重连循环"""
+        while self.reconnect_enabled and self.is_running:
+            try:
+                # 检查连接状态
+                if not self.is_connected and not self.sio.connected:
+                    self.reconnect_attempts += 1
+                    
+                    print(f"🔄 尝试重连 ({self.reconnect_attempts}) - 间隔: {self.reconnect_interval}秒")
+                    
+                    # 尝试重连
+                    if self.connect_to_server():
+                        print("✅ 重连成功！")
+                        # 重连成功后稍等一下，确保连接稳定
+                        time.sleep(self.connection_stable_time)
+                        continue
+                    else:
+                        print(f"❌ 重连失败 ({self.reconnect_attempts})")
+                        
+                        # 逐渐增加重连间隔（指数退避）
+                        self.reconnect_interval = min(
+                            self.reconnect_interval * 1.5, 
+                            self.max_reconnect_interval
+                        )
+                
+                # 等待下次检查
+                time.sleep(self.reconnect_interval)
+                
+            except Exception as e:
+                print(f"❌ 重连循环出错: {e}")
+                time.sleep(self.reconnect_interval)
+    
+    def check_connection_health(self):
+        """检查连接健康状态"""
+        try:
+            if self.sio.connected != self.is_connected:
+                # 连接状态不一致，更新状态
+                self.is_connected = self.sio.connected
+                
+                if not self.is_connected:
+                    print("⚠️ 检测到连接断开，将开始重连...")
+                    self.last_disconnect_time = time.time()
+                    # 启动重连线程（如果尚未启动）
+                    self.start_reconnect_thread()
+                    
+        except Exception as e:
+            print(f"⚠️ 检查连接健康状态时出错: {e}")
     
     def init_camera(self, camera_id=0):
         """初始化摄像头"""
@@ -478,62 +551,67 @@ class FaceEmotionClient:
     def capture_and_send_frames(self):
         """捕获并发送视频帧"""
         frame_id = 0
-        target_fps = 5  # 🆕 降低帧率以支持HTTP隧道
-        frame_interval = 1.0 / target_fps
+        last_send_time = time.time()
+        last_health_check = time.time()
+        send_interval = 1.0 / 15  # 15fps
+        health_check_interval = 5  # 每5秒检查一次连接健康
         
-        print(f"📹 开始捕获视频帧 (目标FPS: {target_fps} - HTTP隧道优化)")
-        
-        while self.is_running and self.camera is not None:
+        while self.is_running:
             try:
                 current_time = time.time()
-                if current_time - self.stats['last_send_time'] < frame_interval:
-                    time.sleep(0.01)
+                
+                # 💚 定期检查连接健康状态
+                if current_time - last_health_check > health_check_interval:
+                    self.check_connection_health()
+                    last_health_check = current_time
+                
+                if self.camera is None:
+                    time.sleep(0.1)
                     continue
                 
                 ret, frame = self.camera.read()
                 if not ret:
-                    print("⚠️ 无法读取摄像头帧")
+                    print("⚠️ 无法读取摄像头数据")
                     time.sleep(0.1)
                     continue
                 
-                frame = cv2.flip(frame, 1)
-                
-                # 🔧 始终更新本地显示帧（作为备用）
-                with self.frame_lock:
-                    if self.display_frame is None:
-                        self.display_frame = frame.copy()
-                
-                if not self.is_connected:
-                    time.sleep(0.033)
+                # 控制发送频率
+                if current_time - last_send_time < send_interval:
+                    time.sleep(0.01)
                     continue
                 
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                image_b64 = base64.b64encode(buffer).decode('utf-8')
+                # 只在连接成功时发送数据
+                if self.is_connected and self.sio.connected:
+                    try:
+                        # 编码图像
+                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                        frame_data = base64.b64encode(buffer).decode('utf-8')
+                        
+                        # 发送数据
+                        self.sio.emit('video_frame', {
+                            'frame_id': frame_id,
+                            'image': frame_data,
+                            'timestamp': current_time
+                        })
+                        
+                        self.stats['frames_sent'] += 1
+                        last_send_time = current_time
+                        frame_id += 1
+                        
+                    except Exception as send_error:
+                        print(f"❌ 发送数据失败: {str(send_error)}")
+                        # 发送失败可能是连接问题，更新状态
+                        self.is_connected = False
+                        self.start_reconnect_thread()  # 🔄 启动重连
                 
-                frame_data = {
-                    'frame_id': frame_id,
-                    'timestamp': current_time,
-                    'image': image_b64,
-                    'client_stats': {
-                        'frames_sent': self.stats['frames_sent'],
-                        'avg_latency': self.stats['avg_latency']
-                    }
-                }
-                
-                try:
-                    self.sio.emit('video_frame', frame_data)
-                    
-                    self.stats['frames_sent'] += 1
-                    self.stats['last_send_time'] = current_time
-                    frame_id += 1
-                except Exception as send_error:
-                    if self.debug_mode:
-                        print(f"❌ 发送帧失败: {send_error}")
-                    time.sleep(0.1)
+                # 控制循环频率
+                time.sleep(0.01)
                 
             except Exception as e:
-                print(f"❌ 发送视频帧时出错: {str(e)}")
+                print(f"❌ 捕获视频帧时出错: {str(e)}")
                 time.sleep(0.1)
+        
+        print("🔄 捕获线程结束")
     
     def display_frames(self):
         """显示视频帧"""
@@ -623,8 +701,18 @@ class FaceEmotionClient:
         height, width = image.shape[:2]
         
         # 连接状态
-        status_text = "Connected" if self.is_connected else "Disconnected"
-        status_color = (0, 255, 0) if self.is_connected else (0, 0, 255)
+        if self.is_connected:
+            status_text = "Connected"
+            status_color = (0, 255, 0)
+        else:
+            # 🔄 显示重连状态
+            if self.reconnect_thread and self.reconnect_thread.is_alive():
+                status_text = f"Reconnecting... ({self.reconnect_attempts})"
+                status_color = (0, 165, 255)  # 橙色
+            else:
+                status_text = "Disconnected"
+                status_color = (0, 0, 255)
+        
         cv2.putText(image, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
         
         # 统计信息
@@ -634,6 +722,14 @@ class FaceEmotionClient:
             
             latency_text = f"Latency: {self.stats['avg_latency']*1000:.1f}ms"
             cv2.putText(image, latency_text, (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        else:
+            # 🔄 显示重连信息
+            if self.reconnect_attempts > 0:
+                reconnect_text = f"Reconnect attempts: {self.reconnect_attempts}"
+                cv2.putText(image, reconnect_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                
+                interval_text = f"Next attempt in: {int(self.reconnect_interval)}s"
+                cv2.putText(image, interval_text, (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
         
         # 🆕 简化控制提示（仅保留退出）
         controls_text = "Press ESC or Q to Exit"
@@ -650,7 +746,9 @@ class FaceEmotionClient:
         
         # 连接服务器
         if not self.connect_to_server():
-            print("❌ 无法连接到服务器，将在离线模式下运行")
+            print("❌ 无法连接到服务器，将启动重连机制")
+            # 🔄 启动重连线程
+            self.start_reconnect_thread()
         
         self.is_running = True
         
@@ -685,6 +783,9 @@ class FaceEmotionClient:
         print("🔄 正在停止客户端...")
         
         self.is_running = False
+        
+        # 🚫 停止重连线程
+        self.stop_reconnect_thread()
         
         # 断开服务器连接
         self.disconnect_from_server()
