@@ -21,14 +21,18 @@ class FaceEmotionClient:
         """
         self.server_url = server_url
         
-        # Socket.IO客户端配置
+        # Socket.IO客户端配置 - 🆕 HTTP隧道优化
         self.sio = socketio.Client(
             logger=False,
             engineio_logger=False,
             reconnection=True,
-            reconnection_attempts=5,
-            reconnection_delay=1,
-            reconnection_delay_max=5
+            reconnection_attempts=10,      # 增加重连次数
+            reconnection_delay=2,          # 增加重连延迟
+            reconnection_delay_max=10,     # 增加最大重连延迟
+            # HTTP隧道优化配置
+            request_timeout=60,            # 增加请求超时
+            http_session=None,             # 使用默认HTTP会话
+            transports=['polling', 'websocket']  # 支持多种传输方式
         )
         
         self.camera = None
@@ -475,10 +479,10 @@ class FaceEmotionClient:
     def capture_and_send_frames(self):
         """捕获并发送视频帧"""
         frame_id = 0
-        target_fps = 10
+        target_fps = 5  # 🆕 降低帧率以支持HTTP隧道
         frame_interval = 1.0 / target_fps
         
-        print(f"📹 开始捕获视频帧 (目标FPS: {target_fps})")
+        print(f"📹 开始捕获视频帧 (目标FPS: {target_fps} - HTTP隧道优化)")
         
         while self.is_running and self.camera is not None:
             try:

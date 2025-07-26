@@ -28,7 +28,19 @@ from utils.API_voice import generate_voice
 # Flask应用初始化
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# 🆕 增强SocketIO配置以支持HTTP隧道
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*", 
+    async_mode='threading',
+    # HTTP隧道优化配置
+    ping_timeout=60,        # 增加ping超时时间
+    ping_interval=25,       # 减少ping间隔
+    max_http_buffer_size=10**8,  # 增加缓冲区大小支持大视频帧
+    allow_upgrades=True,    # 允许协议升级
+    transports=['polling', 'websocket']  # 支持多种传输方式
+)
 
 # 全局变量初始化（保持原有逻辑）
 emotion_cache = {}
@@ -80,6 +92,10 @@ class AIProcessor:
         
         # 🆕 存储当前处理的客户端ID
         self.current_client_id = None
+        
+        # 🆕 时间戳管理 - 解决MediaPipe时间戳错误
+        self.frame_timestamp = 0
+        self.timestamp_lock = threading.Lock()
         
         print("✅ AI处理器初始化完成")
     
@@ -294,8 +310,29 @@ class AIProcessor:
             # 创建显示图像副本
             display_image = original_image.copy()
             
-            # 人脸检测
-            results = BGR_RGB(display_image, self.face_mesh)
+            # 🆕 时间戳管理 - 确保MediaPipe时间戳严格递增
+            with self.timestamp_lock:
+                self.frame_timestamp += 1
+                current_timestamp = self.frame_timestamp
+            
+            # 人脸检测 - 使用带错误处理的版本
+            try:
+                results = BGR_RGB(display_image, self.face_mesh)
+            except Exception as mp_error:
+                print(f"⚠️ MediaPipe处理错误: {str(mp_error)}")
+                # 重新初始化MediaPipe以恢复
+                self.face_mesh = mp_face_mesh.FaceMesh(
+                    max_num_faces=5,
+                    refine_landmarks=True,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+                # 重试一次
+                try:
+                    results = BGR_RGB(display_image, self.face_mesh)
+                except Exception as retry_error:
+                    print(f"❌ MediaPipe重试失败: {str(retry_error)}")
+                    return self._error_response(f"MediaPipe处理失败: {str(retry_error)}")
             detected_faces = process_detection_results(results, display_image.shape)
             
             # 收集当前帧的所有人脸数据
@@ -487,15 +524,41 @@ def handle_video_frame(data):
             connected_clients[client_id]['frames_received'] += 1
             connected_clients[client_id]['last_frame_time'] = time.time()
         
+        # 🆕 添加数据验证
+        if not data or 'image' not in data:
+            print(f"⚠️ 客户端 {client_id} 发送了无效的视频帧数据")
+            emit('error', {'message': '无效的视频帧数据'})
+            return
+        
         # 处理视频帧
         result = ai_processor.process_frame(data)
         
-        # 发送处理结果
-        emit('processed_frame', result)
+        # 🆕 检查处理结果
+        if result and result.get('success', False):
+            emit('processed_frame', result)
+        else:
+            error_msg = result.get('error', '未知处理错误') if result else '处理结果为空'
+            print(f"⚠️ 视频帧处理失败: {error_msg}")
+            emit('error', {'message': error_msg})
         
     except Exception as e:
-        print(f"❌ 处理视频帧时出错: {str(e)}")
-        emit('error', {'message': str(e)})
+        error_msg = f"处理视频帧时出错: {str(e)}"
+        print(f"❌ {error_msg}")
+        emit('error', {'message': error_msg})
+        
+        # 🆕 如果是MediaPipe相关错误，尝试重置AI处理器
+        if 'MediaPipe' in str(e) or 'timestamp' in str(e).lower():
+            print("🔄 检测到MediaPipe错误，尝试重置AI处理器...")
+            try:
+                ai_processor.face_mesh = mp_face_mesh.FaceMesh(
+                    max_num_faces=5,
+                    refine_landmarks=True,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+                print("✅ AI处理器重置成功")
+            except Exception as reset_error:
+                print(f"❌ AI处理器重置失败: {str(reset_error)}")
 
 @socketio.on('ping')
 def handle_ping(data):
