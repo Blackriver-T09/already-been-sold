@@ -539,8 +539,8 @@ def health_check():
 
 if __name__ == '__main__':
     print("🚀 启动人脸情感识别服务器...")
-    print("📡 WebSocket服务器: http://localhost:7860")
-    print("🌐 状态页面: http://localhost:7860")
-    print("❤️ 健康检查: http://localhost:7860/health")
+    print("📡 WebSocket服务器: http://localhost:7861")
+    print("🌐 状态页面: http://localhost:7861")
+    print("❤️ 健康检查: http://localhost:7861/health")
     
-    socketio.run(app, host='0.0.0.0', port=7860, debug=True, use_reloader=False)
+    socketio.run(app, host='0.0.0.0', port=7861, debug=True, use_reloader=False)
