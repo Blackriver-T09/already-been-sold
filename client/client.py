@@ -30,9 +30,8 @@ class FaceEmotionClient:
             reconnection_delay=2,          # 增加重连延迟
             reconnection_delay_max=10,     # 增加最大重连延迟
             # HTTP隧道优化配置
-            request_timeout=60,            # 增加请求超时
-            http_session=None,             # 使用默认HTTP会话
-            transports=['polling', 'websocket']  # 支持多种传输方式
+            request_timeout=60             # 增加请求超时
+            # 注意: transports参数在较旧版本中不支持，已移除
         )
         
         self.camera = None

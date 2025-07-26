@@ -38,8 +38,8 @@ socketio = SocketIO(
     ping_timeout=60,        # 增加ping超时时间
     ping_interval=25,       # 减少ping间隔
     max_http_buffer_size=10**8,  # 增加缓冲区大小支持大视频帧
-    allow_upgrades=True,    # 允许协议升级
-    transports=['polling', 'websocket']  # 支持多种传输方式
+    allow_upgrades=True     # 允许协议升级
+    # 注意: transports参数在较旧版本中可能不支持，已移除
 )
 
 # 全局变量初始化（保持原有逻辑）
